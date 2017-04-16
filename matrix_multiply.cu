@@ -92,6 +92,7 @@ int main(){
     if (c.data[i] - d.data[i] > 1e-5F){
       cout << "Values does not match" << endl;
       match = false;
+      break;
     }
 
   if (match) cout << "All values match" << endl;
