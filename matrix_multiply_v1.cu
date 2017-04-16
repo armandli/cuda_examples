@@ -27,7 +27,7 @@ struct Mtx {
   bool is_cuda;
 
   Mtx(bool is_cuda, size_t rows, size_t cols):
-    data(nullptr), rows(rows), cols(cols) {
+    data(nullptr), is_cuda(is_cuda), rows(rows), cols(cols) {
     if (is_cuda) cudaMalloc(&data, sizeof(T) * rows * cols);
     else         data = new T[rows * cols];
   }
