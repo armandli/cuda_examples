@@ -1,4 +1,6 @@
-//add 2 arrays in parallel
+//add 2 arrays in parallel, often this is faster on CPU than GPU
+//reason is computation is not intense, require more data than
+//computation
 
 #include <cstdlib>
 #include <ctime>

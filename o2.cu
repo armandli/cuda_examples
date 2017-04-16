@@ -1,4 +1,6 @@
-
+//example where there is heavy computation done
+//using very little data, this example GPU outperforms CPU
+//by 100 of times at least
 
 #include <cstdlib>
 #include <ctime>
