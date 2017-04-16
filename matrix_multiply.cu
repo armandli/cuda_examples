@@ -4,7 +4,7 @@
 #include <ctime>
 #include <iostream>
 
-#define BSZ 256
+#define BSZ 128
 #define TSZ 16
 #define SZ (BSZ * TSZ)
 #define TT float
@@ -24,56 +24,62 @@ struct Mtx {
   T* data;
   size_t rows;
   size_t cols;
+  bool is_cuda;
+
+  Mtx(bool is_cuda, size_t rows, size_t cols):
+    data(nullptr), rows(rows), cols(cols) {
+    if (is_cuda) cudaMalloc(&data, sizeof(T) * rows * cols);
+    else         data = new T[rows * cols];
+  }
+
+  ~Mtx(){
+    if (is_cuda) cudaFree(data);
+    else         delete[] data;
+  }
 };
 
 template <typename T>
-__global__ matrix_multiply_cuda_v1(Mtx<T>* c, Mtx<T>* a, Mtx<T>* b){
+__global__ void matrix_multiply_cuda_v1(Mtx<T>& c, Mtx<T>& a, Mtx<T>& b){
   size_t x = blockIdx.x * blockDim.x + threadIdx.x;
   size_t y = blockIdx.y * blockDim.y + threadIdx.y;
 
   T cval = 0.F;
-  for (size_t i = 0; i < a->cols; ++i)
-    cval += a->data[x * a.cols + i] * b->data[i * b.cols + y];
-  c->data[x * c.cols + y] = cval;
+  for (size_t i = 0; i < a.cols; ++i)
+    cval += a.data[x * a.cols + i] * b.data[i * b.cols + y];
+  c.data[x * c.cols + y] = cval;
 }
 
 template <typename T>
-clock_t matrix_multiply_v1(T* c, const T* a, const T* b, size_t r, size_t c, size_t m){
-  for (size_t i = 0; i < r; ++i)
-    for (size_t j = 0; j < c; ++j)
-      for (size_t k = 0; k < m; ++k)
-        c[i * c + j] += a[i * m + k] * b[k * c + j];
+clock_t matrix_multiply_v1(Mtx<T>& c, Mtx<T>& a, Mtx<T>& b){
+  for (size_t i = 0; i < c.rows; ++i)
+    for (size_t j = 0; j < c.cols; ++j){
+      c.data[i * c.cols + j] = 0.;
+      for (size_t k = 0; k < a.cols; ++k)
+        c.data[i * c.cols + j] += a.data[i * a.cols + k] * b.data[k * b.cols + j];
+    }
 
   return clock();
 }
 
 int main(){
-  TT* c = new TT[SZ * SZ], *a = new TT[SZ * SZ], *b = new TT[SZ * SZ], *d = new TT[SZ * SZ];
-  TT* dc, *da, *db;
+  Mtx<TT> c(false, SZ, SZ), a(false, SZ, SZ), b(false, SZ, SZ), d(false, SZ, SZ);
+  Mtx<TT> dc(true, SZ, SZ), da(true, SZ, SZ), db(true, SZ, SZ);
 
-  random_matrix(a, SZ * SZ);
-  random_matrix(b, SZ * SZ);
-
-  cudaMalloc(&da, sizeof(TT) * SZ * SZ);
-  cudaMalloc(&db, sizeof(TT) * SZ * SZ);
-  cudaMalloc(&dc, sizeof(TT) * SZ * SZ);
+  random_matrix(a.data, SZ * SZ);
+  random_matrix(b.data, SZ * SZ);
 
   clock_t timing_start = clock();
 
-  cudaMemcpy(da, a, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
-  cudaMemcpy(db, b, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
+  cudaMemcpy(da.data, a.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
+  cudaMemcpy(db.data, b.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
 
   dim3 dblock(BSZ, BSZ);
   dim3 dthread(BSZ, BSZ);
   matrix_multiply_cuda_v1<<<dblock, dthread>>>(dc, da, db);
 
-  cudaMemcpy(c, dc, sizeof(TT) * SZ * SZ, cudaMemcpyDeviceToHost);
+  cudaMemcpy(c.data, dc.data, sizeof(TT) * SZ * SZ, cudaMemcpyDeviceToHost);
 
   cout << "CUDA time: " << (clock() - timing_start) / (double)(CLOCKS_PER_SEC / 1000) << " ms" << endl;
-
-  cudaFree(da);
-  cudaFree(db);
-  cudaFree(dc);
 
   timing_start = clock();
 
@@ -83,7 +89,7 @@ int main(){
 
   bool match = true;
   for (size_t i = 0; i < SZ * SZ; ++i)
-    if (c[i] - d[i] > 1e-5F){
+    if (c.data[i] - d.data[i] > 1e-5F){
       cout << "Values does not match" << endl;
       match = false;
     }
