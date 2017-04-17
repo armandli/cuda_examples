@@ -1,4 +1,4 @@
-//matrix multiply
+//matrix multiply, with 2048 by 2048 square matrix, gpu is faster even with the least efficient implementation
 
 #include <cstdlib>
 #include <ctime>
