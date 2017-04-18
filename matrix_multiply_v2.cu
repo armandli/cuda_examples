@@ -4,8 +4,8 @@
 #include <ctime>
 #include <iostream>
 
-#define BSZ 128
-#define TSZ 16
+#define BSZ 16
+#define TSZ 32
 #define SZ (BSZ * TSZ)
 #define TT double
 
@@ -137,7 +137,7 @@ int main(){
 
   bool match = true;
   for (size_t i = 0; i < SZ * SZ; ++i)
-    if (c.data[i] - d.data[i] > 1e-5F){
+    if (abs(c.data[i] - d.data[i]) > 1e-7F){
       cout << "Values does not match" << endl;
       match = false;
       break;
