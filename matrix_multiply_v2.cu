@@ -7,7 +7,7 @@
 #define BSZ 128
 #define TSZ 16
 #define SZ (BSZ * TSZ)
-#define TT float
+#define TT double
 
 using namespace std;
 
@@ -25,48 +25,42 @@ public:
   T* data;
   size_t rows;
   size_t cols;
-  size_t stride;
-  int ownership_state;
+  bool is_cuda;
 
-  Mtx(): data(nullptr), rows(0), cols(0), stride(0), ownership_state(3) {}
   Mtx(bool is_cuda, size_t rows, size_t cols):
-    data(nullptr), rows(rows), cols(cols), stride(cols), ownership_state(is_cuda ? 2 : 1) {
+    data(nullptr), rows(rows), cols(cols), is_cuda(is_cuda) {
     if (is_cuda) cudaMalloc(&data, sizeof(T) * rows * cols);
     else         data = new T[rows * cols];
   }
 
   ~Mtx(){
-    switch (ownership_state){
-      case 1: delete[] data; break;
-      case 2: cudaFree(data); break;
-      case 3: break;
-      default: assert(false);
-    }
+    if (is_cuda) cudaFree(data);
+    else         delete[] data;
   }
-
-//private:
-//  Mtx(T* data, size_t rows, size_t cols, size_t stride):
-//    data(data), rows(rows), cols(cols), stride(stride), ownership_state(3) {}
-//public:
-//  Mtx sub_matrix_stride(size_t row_stride, size_t col_stride){
-//    return Mtx(&data[stride * TSZ * row_stride + TSZ * col_stride], TSZ, TSZ, stride);
-//  }
 };
 
 template <typename T>
-__device__ T get_elem(Mtx<T>& a, size_t i, size_t j){
-  return a.data[i * a.cols + j];
+struct SubMtx {
+  T* data;
+  size_t rows;
+  size_t cols;
+  size_t stride;
+};
+
+template <typename T>
+__device__ T get_elem(SubMtx<T>& a, size_t i, size_t j){
+  return a.data[i * a.stride + j];
 }
 
 template <typename T>
-__device__ void set_elem(Mtx<T>& a, size_t i, size_t j, T val){
-  a.data[i * a.cols + j] = val;
+__device__ void set_elem(SubMtx<T>& a, size_t i, size_t j, T val){
+  a.data[i * a.stride + j] = val;
 }
 
 template <typename T>
-__device__ Mtx<T> sub_matrix_stride(Mtx<T>& m, size_t row_stride, size_t col_stride){
-  Mtx<T> ret;
-  ret.data = &m.data[m.stride * TSZ * row_stride + TSZ * col_stride];
+__device__ SubMtx<T> sub_matrix_stride(Mtx<T>& m, size_t row_stride, size_t col_stride){
+  SubMtx<T> ret;
+  ret.data = &m.data[m.cols * TSZ * row_stride + TSZ * col_stride];
   ret.rows = ret.cols = TSZ;
   ret.stride = m.cols;
   return ret;
@@ -75,15 +69,15 @@ __device__ Mtx<T> sub_matrix_stride(Mtx<T>& m, size_t row_stride, size_t col_str
 template <typename T>
 __global__ void matrix_multiply_cuda_v2(Mtx<T>& c, Mtx<T>& a, Mtx<T>& b){
   size_t bx = blockIdx.x, by = blockIdx.y;
-  Mtx<T> csub = sub_matrix_stride(c, bx, by);
+  SubMtx<T> csub = sub_matrix_stride(c, bx, by);
 
   T cval = 0.;
 
   size_t row = threadIdx.x, col = threadIdx.y;
 
   for (size_t i = 0; i < BSZ; ++i){
-    Mtx<T> asub = sub_matrix_stride(a, bx, i);
-    Mtx<T> bsub = sub_matrix_stride(b, i, by);
+    SubMtx<T> asub = sub_matrix_stride(a, bx, i);
+    SubMtx<T> bsub = sub_matrix_stride(b, i, by);
 
     __shared__ T amem[TSZ][TSZ];
     __shared__ T bmem[TSZ][TSZ];
@@ -99,7 +93,8 @@ __global__ void matrix_multiply_cuda_v2(Mtx<T>& c, Mtx<T>& a, Mtx<T>& b){
     __syncthreads();
   }
 
-  set_elem(csub, bx * blockDim.x + row, by * blockDim.y + col, cval);
+//  set_elem(csub, bx * blockDim.x + row, by * blockDim.y + col, cval);
+  set_elem(csub, row, col, cval);
 }
 
 template <typename T>
