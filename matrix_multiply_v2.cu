@@ -19,6 +19,24 @@ void random_matrix(T* m, size_t sz){
     m[i] = (TT)rand() / 100.F;
 }
 
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+
+template <typename T>
+struct CudaMtx {
+  T* data;
+  size_t rows;
+  size_t cols;
+  size_t stride;
+};
+
 template <typename T>
 struct Mtx {
 public:
@@ -29,55 +47,55 @@ public:
 
   Mtx(bool is_cuda, size_t rows, size_t cols):
     data(nullptr), rows(rows), cols(cols), is_cuda(is_cuda) {
-    if (is_cuda) cudaMalloc(&data, sizeof(T) * rows * cols);
+    if (is_cuda) { gpuErrchk(cudaMalloc(&data, sizeof(T) * rows * cols)); }
     else         data = new T[rows * cols];
   }
 
   ~Mtx(){
-    if (is_cuda) cudaFree(data);
+    if (is_cuda) { gpuErrchk(cudaFree(data)); }
     else         delete[] data;
+  }
+
+  CudaMtx<T> cuda_mtx(){
+    CudaMtx<T> ret;
+    ret.data = data;
+    ret.rows = rows;
+    ret.cols = ret.stride = cols;
+    return ret;
   }
 };
 
 template <typename T>
-struct SubMtx {
-  T* data;
-  size_t rows;
-  size_t cols;
-  size_t stride;
-};
-
-template <typename T>
-__device__ T get_elem(SubMtx<T>& a, size_t i, size_t j){
+__device__ T get_elem(CudaMtx<T>& a, size_t i, size_t j){
   return a.data[i * a.stride + j];
 }
 
 template <typename T>
-__device__ void set_elem(SubMtx<T>& a, size_t i, size_t j, T val){
+__device__ void set_elem(CudaMtx<T>& a, size_t i, size_t j, T val){
   a.data[i * a.stride + j] = val;
 }
 
 template <typename T>
-__device__ SubMtx<T> sub_matrix_stride(Mtx<T>& m, size_t row_stride, size_t col_stride){
-  SubMtx<T> ret;
+__device__ CudaMtx<T> sub_matrix_stride(CudaMtx<T>& m, size_t row_stride, size_t col_stride){
+  CudaMtx<T> ret;
   ret.data = &m.data[m.cols * TSZ * row_stride + TSZ * col_stride];
   ret.rows = ret.cols = TSZ;
-  ret.stride = m.cols;
+  ret.stride = m.stride;
   return ret;
 }
 
 template <typename T>
-__global__ void matrix_multiply_cuda_v2(Mtx<T>& c, Mtx<T>& a, Mtx<T>& b){
+__global__ void matrix_multiply_cuda_v2(CudaMtx<T> c, CudaMtx<T> a, CudaMtx<T> b){
   size_t bx = blockIdx.x, by = blockIdx.y;
-  SubMtx<T> csub = sub_matrix_stride(c, bx, by);
+  CudaMtx<T> csub = sub_matrix_stride(c, bx, by);
 
   T cval = 0.;
 
   size_t row = threadIdx.x, col = threadIdx.y;
 
   for (size_t i = 0; i < BSZ; ++i){
-    SubMtx<T> asub = sub_matrix_stride(a, bx, i);
-    SubMtx<T> bsub = sub_matrix_stride(b, i, by);
+    CudaMtx<T> asub = sub_matrix_stride(a, bx, i);
+    CudaMtx<T> bsub = sub_matrix_stride(b, i, by);
 
     __shared__ T amem[TSZ][TSZ];
     __shared__ T bmem[TSZ][TSZ];
@@ -93,7 +111,6 @@ __global__ void matrix_multiply_cuda_v2(Mtx<T>& c, Mtx<T>& a, Mtx<T>& b){
     __syncthreads();
   }
 
-//  set_elem(csub, bx * blockDim.x + row, by * blockDim.y + col, cval);
   set_elem(csub, row, col, cval);
 }
 
@@ -118,14 +135,16 @@ int main(){
 
   clock_t timing_start = clock();
 
-  cudaMemcpy(da.data, a.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
-  cudaMemcpy(db.data, b.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
+  gpuErrchk(cudaMemcpy(da.data, a.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(db.data, b.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice));
 
   dim3 dblock(BSZ, BSZ);
   dim3 dthread(BSZ, BSZ);
-  matrix_multiply_cuda_v2<<<dblock, dthread>>>(dc, da, db);
+  matrix_multiply_cuda_v2<<<dblock, dthread>>>(dc.cuda_mtx(), da.cuda_mtx(), db.cuda_mtx());
+  gpuErrchk(cudaPeekAtLastError());
+  gpuErrchk(cudaDeviceSynchronize());
 
-  cudaMemcpy(c.data, dc.data, sizeof(TT) * SZ * SZ, cudaMemcpyDeviceToHost);
+  gpuErrchk(cudaMemcpy(c.data, dc.data, sizeof(TT) * SZ * SZ, cudaMemcpyDeviceToHost));
 
   cout << "CUDA time: " << (clock() - timing_start) / (double)(CLOCKS_PER_SEC / 1000) << " ms" << endl;
 

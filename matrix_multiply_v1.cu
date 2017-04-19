@@ -1,13 +1,14 @@
 //matrix multiply, with 2048 by 2048 square matrix, gpu is faster even with the least efficient implementation
 
+#include <cassert>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
 
-#define BSZ 1
+#define BSZ 128
 #define TSZ 16
 #define SZ (BSZ * TSZ)
-#define TT float
+#define TT double
 
 using namespace std;
 
@@ -30,6 +31,13 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 }
 
 template <typename T>
+struct CudaMtx {
+  T* data;
+  size_t rows;
+  size_t cols;
+};
+
+template <typename T>
 struct Mtx {
   T* data;
   size_t rows;
@@ -46,18 +54,26 @@ struct Mtx {
     if (is_cuda) cudaFree(data);
     else         delete[] data;
   }
+
+  CudaMtx<T> cuda_mtx(){
+    assert(is_cuda, "matrix is not allocated on CUDA");
+    CudaMtx<T> ret;
+    ret.data = data;
+    ret.rows = rows;
+    ret.cols = cols;
+    return ret;
+  }
 };
 
 template <typename T>
-//__global__ void matrix_multiply_cuda_v1(Mtx<T>& m, Mtx<T>& a, Mtx<T>& b){
-__global__ void matrix_multiply_cuda_v1(T* m, T* a, T* b, size_t rows, size_t cols, size_t k){
+__global__ void matrix_multiply_cuda_v1(CudaMtx<T> m, CudaMtx<T> a, CudaMtx<T> b){
   size_t r = blockIdx.x * blockDim.x + threadIdx.x;
   size_t c = blockIdx.y * blockDim.y + threadIdx.y;
 
   T mval = 0.F;
   for (size_t i = 0; i < k; ++i)
-    mval += a[r * k + i] * b[i * cols + c];
-  m[r * cols + c] = mval;
+    mval += a.data[r * a.cols + i] * b[i * b.cols + c];
+  m[r * m.cols + c] = mval;
 }
 
 template <typename T>
@@ -90,7 +106,7 @@ int main(){
 
   dim3 dblock(BSZ, BSZ);
   dim3 dthread(TSZ, TSZ);
-  matrix_multiply_cuda_v1<<<1, dthread>>>(dc.data, da.data, db.data, SZ, SZ, SZ);
+  matrix_multiply_cuda_v1<<<1, dthread>>>(dc.cuda_mtx(), da.cuda_mtx(), db.cuda_mtx());
   gpuErrchk( cudaPeekAtLastError() );
   gpuErrchk( cudaDeviceSynchronize() );
 
@@ -106,14 +122,16 @@ int main(){
 //
 //  clock_t timing_start = clock();
 //
-//  cudaMemcpy(da.data, a.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
-//  cudaMemcpy(db.data, b.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice);
+//  gpuErrchk(cudaMemcpy(da.data, a.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice));
+//  gpuErrchk(cudaMemcpy(db.data, b.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice));
 //
 //  dim3 dblock(BSZ, BSZ);
 //  dim3 dthread(TSZ, TSZ);
-//  matrix_multiply_cuda_v1<<<dblock, dthread>>>(dc, da, db);
+//  matrix_multiply_cuda_v1<<<dblock, dthread>>>(dc.cuda_mtx(), da.cuda_mtx(), db.cuda_mtx());
+//  gpuErrchk(cudaPeekAtLastError());
+//  gpuErrchk(cudaDeviceSynchronize());
 //
-//  cudaMemcpy(c.data, dc.data, sizeof(TT) * SZ * SZ, cudaMemcpyDeviceToHost);
+//  gpuErrchk(cudaMemcpy(c.data, dc.data, sizeof(TT) * SZ * SZ, cudaMemcpyDeviceToHost));
 //
 //  cout << "CUDA time: " << (clock() - timing_start) / (double)(CLOCKS_PER_SEC / 1000) << " ms" << endl;
 //
