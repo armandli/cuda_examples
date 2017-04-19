@@ -1,22 +1,30 @@
 //matrix multiply using shared memory for optimization
 
+#include <cassert>
 #include <cstdlib>
 #include <ctime>
+#include <random>
 #include <iostream>
 
-#define BSZ 16
-#define TSZ 32
+#define BSZ 128
+#define TSZ 16
 #define SZ (BSZ * TSZ)
 #define TT double
 
 using namespace std;
 
+default_random_engine& get_default_random_engine(){
+  static default_random_engine eng(time(0));
+  return eng;
+}
+
 template <typename T>
 void random_matrix(T* m, size_t sz){
-  srand(time(0));
+  uniform_real_distribution<T> dist(-100.F, 100.F);
+  default_random_engine& eng = get_default_random_engine();
 
   for (size_t i = 0; i < sz; ++i)
-    m[i] = (TT)rand() / 100.F;
+    m[i] = dist(eng);
 }
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -57,6 +65,7 @@ public:
   }
 
   CudaMtx<T> cuda_mtx(){
+    assert(is_cuda);
     CudaMtx<T> ret;
     ret.data = data;
     ret.rows = rows;
@@ -139,7 +148,7 @@ int main(){
   gpuErrchk(cudaMemcpy(db.data, b.data, sizeof(TT) * SZ * SZ, cudaMemcpyHostToDevice));
 
   dim3 dblock(BSZ, BSZ);
-  dim3 dthread(BSZ, BSZ);
+  dim3 dthread(TSZ, TSZ);
   matrix_multiply_cuda_v2<<<dblock, dthread>>>(dc.cuda_mtx(), da.cuda_mtx(), db.cuda_mtx());
   gpuErrchk(cudaPeekAtLastError());
   gpuErrchk(cudaDeviceSynchronize());
@@ -154,13 +163,14 @@ int main(){
 
   cout << "CPU time: " << (timing_end - timing_start) / (double)(CLOCKS_PER_SEC / 1000) << " ms" << endl;
 
-  bool match = true;
+  size_t mismatch = 0;
   for (size_t i = 0; i < SZ * SZ; ++i)
-    if (abs(c.data[i] - d.data[i]) > 1e-7F){
-      cout << "Values does not match" << endl;
-      match = false;
+    if (fabs(c.data[i] - d.data[i]) / d.data[i] > 5e-3F){
+      cout << "difference: " << (fabs(c.data[i] - d.data[i]) / d.data[i]) << endl;
+      mismatch++;
       break;
     }
 
-  if (match) cout << "All values match" << endl;
+  if (mismatch == 0) cout << "All values match" << endl;
+  else               cout << mismatch << " differences" << endl;
 }
